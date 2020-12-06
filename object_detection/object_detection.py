@@ -49,7 +49,7 @@ A positive z means going upwards.
 OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this isn't visible
 CAMERA_DISPLACEMENT = [0.00, 0.20, 0.10]  # position of the camera on the wheelchair
 CAMERA_ANGLE = np.deg2rad(15)  # camera angle around the x-axis in radians
-MAX_OBJECT_HISTORY = 3  # determines how many past instances of an object are remembered, used for filtering final results
+MAX_OBJECT_HISTORY = 1  # determines how many past instances of an object are remembered, used for filtering final results
 DETECTABLE_OBJECTS = [67]  # IDs of the objects that need to be detected
 
 # replace these later:
@@ -79,6 +79,44 @@ def absolute_position(rel_pos, wheelchair_pos, angle):
     z = (result[2]+wheelchair_pos[2])[0]
     return x, y, z
 
+# Determines the distance to the object and calculates the object's position
+def calculate_relative_position(box, depth_frame, depth_intrin):
+    x_mid = int((box[0]+box[2])/2)
+    y_mid = int((box[1]+box[3])/2)
+    pixel_depths = []
+    for i in range(3):
+        for j in range(3):
+            pixel_depths.append(depth_frame.get_distance(int(x_mid+i-1),int(y_mid+j-1)))
+    object_depth = statistics.median(pixel_depths)
+    # If detection of object depth failed
+    if object_depth == 0.0:
+        print('depth not found')
+        return None, None
+    else:
+        object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
+        object_xyz = [object_point[0], object_point[2], -object_point[1]]
+        #depth_colormap[max(0, min(y_mid, 479)), max(0, min(x_mid, 639))] = [0,255,0]
+        return object_xyz, object_depth
+
+# Clears all markers with IDs starting from the current amount of markers (so only unwanted markers)
+def clear_markers(amount, largest_amount):
+    empty_markers = MarkerArray()
+    for i in range(largest_amount-amount):
+        empty_marker = Marker()
+        empty_marker.header.frame_id = "base_link"
+        empty_marker.type = Marker.CUBE
+        empty_marker.pose.position.x = 0
+        empty_marker.pose.position.y = 0
+        empty_marker.pose.position.z = 0
+        empty_marker.scale.x = 0.1
+        empty_marker.scale.y = 0.1
+        empty_marker.scale.z = 0.1
+        empty_marker.color.a = 0
+        empty_marker.pose.orientation.w = 1.0
+        empty_marker.id = i + amount
+        empty_markers.markers.append(empty_marker)
+    publisher.publish(empty_markers)
+
 class Object():
     '''
     This class requires the following arguments:
@@ -91,7 +129,7 @@ class Object():
     '''
     def __init__(self, object_type, rel_pos, distance, wheelchair_pos, angle, bbox):
         self.recent_detections = []
-        self.object_type = object_type
+        self.type = object_type
         self.update_pose(rel_pos, distance, wheelchair_pos, angle, bbox)
 
     def update_pose(self, rel_pos, distance, wheelchair_pos, angle, bbox):
@@ -220,6 +258,7 @@ if __name__=="__main__":
     # Detect object at a given frequency
     rate = rospy.Rate(10) # hz
     object_list = []
+    largest_index = 0
     while not rospy.is_shutdown():
         markers = MarkerArray()
         markers.markers.append(camera)
@@ -272,54 +311,48 @@ if __name__=="__main__":
         bboxes = utils.postprocess_boxes(pred_bbox, frame_size, input_size, 0.25)
         bboxes = utils.nms(bboxes, 0.213, method='nms')
 
-	# Loop over each detected object
-        object_list_copy = object_list.copy()
+        # Filter objects of interest
+        detected_objects = []
         for box in bboxes:
-            x_mid = int((box[0]+box[2])/2)
-            y_mid = int((box[1]+box[3])/2)
-	    # Determines the distance to the object and calculates the object's position
-            pixel_depths = []
-            for i in range(3):
-                for j in range(3):
-                    pixel_depths.append(depth_frame.get_distance(int(x_mid+i-1),int(y_mid+j-1)))
-            object_depth = statistics.median(pixel_depths)
-            object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
-            object_xyz = [object_point[0], object_point[2], -object_point[1]]
-            # Checks if this type of object is of interest
             for object_id in DETECTABLE_OBJECTS:
                 if box[5] == object_id:
-                    # If detection of object depth failed
-                    if object_depth == 0.0:
-                        print('depth not found')
-                    else:
-                        # Calculates the position of the object in the world and compares which, if any, object of the same type lies closest to it
-                        object_x, object_y, object_z = absolute_position(object_xyz, WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
-                        closest_match = None
-                        closest_match_distance = None
-                        for detected_object in object_list_copy:
-                            if detected_object.object_type == box[5]:
-                                # Check which of the same previously detected objects lies closest
-                                distance = abs(object_x-detected_object.x)+abs(object_y-detected_object.y)+abs(object_z-detected_object.z)
-                                if closest_match == None:
-                                    closest_match = detected_object
-                                    closest_match_distance = distance
-                                elif distance < closest_match_distance:
-                                    closest_match = detected_object
-                                    closest_match_distance = distance
-                        # Update the pose of the object that got detected again
-                        if closest_match is not None:
-                            object_list_copy.remove(closest_match)
-                            closest_match.update_pose(object_xyz, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, box)
-                            markers.markers.append(closest_match.marker())
-                        # Create a new object if this object hasn't been recognized before
-                        else:
-                            #depth_colormap[max(0, min(y_mid, 479)), max(0, min(x_mid, 639))] = [0,255,0]
-                            new_object = Object(box[5], object_xyz, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, box)
-                            object_list.append(new_object)
-                            markers.markers.append(new_object.marker())
-        # If a previous object hasn't been recognized, remove it
-        for lost_object in object_list_copy:
-            object_list.remove(lost_object)
+                    print("found", object_id)
+                    detected_objects.append(box.tolist())
+
+	# Loop over each previously detected object
+        for known_object in object_list:
+            closest_match = None
+            closest_match_distance = None
+            for box in detected_objects:
+                # Check which of the detected objects of the same type lies closest
+                if box[5] == known_object.type:
+                    object_xyz_relative, object_depth = calculate_relative_position(box, depth_frame, depth_intrin)
+                    if object_xyz_relative is not None:
+                        object_x, object_y, object_z = absolute_position(object_xyz_relative, WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
+                        distance = abs(object_x-known_object.x)+abs(object_y-known_object.y)+abs(object_z-known_object.z)
+                        if closest_match is None:
+                            closest_match = box
+                            closest_match_distance = distance
+                        elif distance < closest_match_distance:
+                            closest_match = box
+                            closest_match_distance = distance
+            # Update the pose of the object with the closest new detection
+            if closest_match is not None:
+                object_xyz_relative, object_depth = calculate_relative_position(closest_match, depth_frame, depth_intrin)
+                known_object.update_pose(object_xyz_relative, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, box)
+                # Remove the detection from the list as it has been matched with a previously detected object
+                detected_objects.remove(closest_match)
+            # What to do when an object can't find a match, possibly remove it
+            else:
+                # TODO
+                pass
+        # If there are still detections remaining after all objects have been matched, create a new object for each new detection
+        for new_object_box in detected_objects:
+            object_xyz_relative, object_depth = calculate_relative_position(new_object_box, depth_frame, depth_intrin)
+            if object_xyz_relative is not None:
+                new_object = Object(new_object_box[5], object_xyz_relative, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, new_object_box)
+                object_list.append(new_object)
+        print(object_list)
 
 	# Show the detected objects
         cv2.namedWindow("result", cv2.WINDOW_AUTOSIZE)
@@ -332,10 +365,19 @@ if __name__=="__main__":
             pipeline.stop()
             break
 
+        # Creates markers for every detected object
+        for detected_object in object_list:
+            markers.markers.append(detected_object.marker())
+
         index = 0
         for m in markers.markers:
             m.id = index
             index += 1
+
+        # Memorizes the largest amount of objects saved at one time to be able to clear the markers
+        if index > largest_index:
+            largest_index = index
+        clear_markers(index, largest_index)
 
         publisher.publish(markers)
         rate.sleep()
