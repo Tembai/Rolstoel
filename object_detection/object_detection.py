@@ -46,15 +46,17 @@ A positive x means going to the right of the camera.
 A positive y means going in the direction the camera is facing.
 A positive z means going upwards.
 '''
-OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this isn't visible
 CAMERA_DISPLACEMENT = [0.00, 0.20, 0.10]  # position of the camera on the wheelchair
-CAMERA_ANGLE = np.deg2rad(15)  # camera angle around the x-axis in radians
-MAX_OBJECT_HISTORY = 1  # determines how many past instances of an object are remembered, used for filtering final results
+CAMERA_ANGLE = np.deg2rad(0)  # camera angle around the x-axis in radians
+CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(69.4)  # the horizontal field of view of the camera in radians
 DETECTABLE_OBJECTS = [67]  # IDs of the objects that need to be detected
 
 # replace these later:
+OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this isn't visible
+MAX_OBJECT_HISTORY = 1  # determines how many past instances of an object are remembered, used for filtering final results
 WHEELCHAIR_POS = [0, 0, 0]
-WHEELCHAIR_ANGLE = 0
+WHEELCHAIR_ANGLE = np.deg2rad(0)
+MAX_VIEW_DISTANCE = 3  # how far the camera can see in meters
 
 def main(_argv):
     pass
@@ -63,7 +65,7 @@ def main(_argv):
 def calculate_length(pixels, distance):
     return pixels*distance*0.0014
 
-def absolute_position(rel_pos, wheelchair_pos, angle):
+def absolute_position(rel_pos, wheelchair_pos, wheelchair_angle):
     # uses a rotation matrix to calculate the position of the object relative to the wheelchair
     rel_pos = np.array([[rel_pos[0],], [rel_pos[1]], [rel_pos[2]]])
     rot_mat = np.array([[1, 0, 0], [0, np.cos(CAMERA_ANGLE), -np.sin(CAMERA_ANGLE)], [0, np.sin(CAMERA_ANGLE), np.cos(CAMERA_ANGLE)]])
@@ -72,7 +74,7 @@ def absolute_position(rel_pos, wheelchair_pos, angle):
     result[1] = result[1]+CAMERA_DISPLACEMENT[1]
     result[2] = result[2]+CAMERA_DISPLACEMENT[2]
     # uses a rotation matrix to calculate the position of the object relative to the world
-    rot_mat = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    rot_mat = np.array([[np.cos(wheelchair_angle), -np.sin(wheelchair_angle), 0], [np.sin(wheelchair_angle), np.cos(wheelchair_angle), 0], [0, 0, 1]])
     result = np.dot(rot_mat, result)
     x = (result[0]+wheelchair_pos[0])[0]
     y = (result[1]+wheelchair_pos[1])[0]
@@ -97,6 +99,29 @@ def calculate_relative_position(box, depth_frame, depth_intrin):
         object_xyz = [object_point[0], object_point[2], -object_point[1]]
         #depth_colormap[max(0, min(y_mid, 479)), max(0, min(x_mid, 639))] = [0,255,0]
         return object_xyz, object_depth
+
+# Calculates if a given point is in view of the camera in 2D
+def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_distance):
+    # Calculates the position of the point relative to the camera
+    point_x = point_x-camera_x
+    point_y = point_y-camera_y
+    position = np.array([[point_x], [point_y]])
+    rot_mat = np.array([[np.cos(-WHEELCHAIR_ANGLE), -np.sin(-WHEELCHAIR_ANGLE)], [np.sin(-WHEELCHAIR_ANGLE), np.cos(-WHEELCHAIR_ANGLE)]])
+    result = np.dot(rot_mat, position)
+    print(result)
+    # Checks if the point is behind the camera or too far away
+    distance = result[1][0]
+    if distance <= 0 or distance > max_distance:
+        return False
+    else:
+        # Checks if the point lies within the triangle-shaped view of the camera
+        x_position = result[0][0]
+        outer_x = distance*np.sin(CAMERA_VIEW_ANGLE_HORIZONTAL)
+        #print(outer_x)
+        if x_position > -outer_x and x_position < outer_x:
+            return True
+        else:
+            return False
 
 # Clears all markers with IDs starting from the current amount of markers (so only unwanted markers)
 def clear_markers(amount, largest_amount):
@@ -127,22 +152,23 @@ class Object():
     -the angle of the wheelchair around the z-axis in radians
     -the bounding box of the recognized object
     '''
-    def __init__(self, object_type, rel_pos, distance, wheelchair_pos, angle, bbox):
+    def __init__(self, object_type, rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox):
         self.recent_detections = []
         self.type = object_type
-        self.update_pose(rel_pos, distance, wheelchair_pos, angle, bbox)
+        self.update_pose(rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox)
 
-    def update_pose(self, rel_pos, distance, wheelchair_pos, angle, bbox):
-        self.x, self.y, self.z = absolute_position(rel_pos, wheelchair_pos, angle)
+    def update_pose(self, rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox):
+        self.x, self.y, self.z = absolute_position(rel_pos, wheelchair_pos, wheelchair_angle)
         self.scale_x = calculate_length(box[2]-box[0], object_depth)
         self.scale_y = OBJECT_DEPTH_ESTIMATE
         self.scale_z = calculate_length(box[3]-box[1], object_depth)
-        self.orientation_z = angle
+        self.orientation_z = wheelchair_angle
         self.recent_detections.append([[self.x, self.y, self.z], [self.scale_x, self.scale_y, self.scale_z], self.orientation_z])
         if len(self.recent_detections) > MAX_OBJECT_HISTORY:
             self.recent_detections.pop(0)
 
     # Calculates new values based on previous detections.
+    # TODO remove or re-implement this
     def average_detections(self):
         amount = len(self.recent_detections)
         total_x, total_y, total_z, total_scale_x, total_scale_y, total_scale_z, total_orientation = 0, 0, 0, 0, 0, 0, 0
@@ -263,7 +289,7 @@ if __name__=="__main__":
         markers = MarkerArray()
         markers.markers.append(camera)
 
-	# Read camera frames
+	    # Read camera frames
         frames = pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
 
@@ -274,12 +300,12 @@ if __name__=="__main__":
         if not depth_frame or not color_frame:
             continue
 
-	# Get the intrinsics of the video streams to later calculate a 3D position
+	    # Get the intrinsics of the video streams to later calculate a 3D position
         depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
         color_intrin = color_frame.profile.as_video_stream_profile().intrinsics
         depth_to_color_extrin = depth_frame.profile.get_extrinsics_to(color_frame.profile)
 
-	# Change the frames into an image
+	    # Change the frames into an image
         depth_image = np.asanyarray(depth_frame.get_data())
         color_image = np.asanyarray(color_frame.get_data())
 
@@ -294,7 +320,7 @@ if __name__=="__main__":
         scaled_depth=cv2.convertScaleAbs(depth_image, alpha=0.08)
         depth_colormap = cv2.applyColorMap(scaled_depth, cv2.COLORMAP_JET)
 
-	# Feed the color image into the neural network
+	    # Feed the color image into the neural network
         if FLAGS.framework == 'tf':
             pred_bbox = model.predict(image_data)
         else:
@@ -307,7 +333,7 @@ if __name__=="__main__":
         else:
             pred_bbox = utils.postprocess_bbbox(pred_bbox, ANCHORS, STRIDES)
 
-	# Draw boxes around the detected objects
+	    # Draw boxes around the detected objects
         bboxes = utils.postprocess_boxes(pred_bbox, frame_size, input_size, 0.25)
         bboxes = utils.nms(bboxes, 0.213, method='nms')
 
@@ -319,8 +345,15 @@ if __name__=="__main__":
                     print("found", object_id)
                     detected_objects.append(box.tolist())
 
-	# Loop over each previously detected object
+        # Filter previously detected objects that are in view
+        visible_object_list = []
+        camera_x, camera_y, camera_z = absolute_position([0, 0, 0], WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
         for known_object in object_list:
+            if point_in_view(known_object.x, known_object.y, camera_x, camera_y, WHEELCHAIR_ANGLE, MAX_VIEW_DISTANCE):
+                visible_object_list.append(known_object)
+
+	    # Loop over each previously detected object that should be in view
+        for known_object in visible_object_list:
             closest_match = None
             closest_match_distance = None
             for box in detected_objects:
@@ -342,10 +375,9 @@ if __name__=="__main__":
                 known_object.update_pose(object_xyz_relative, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, box)
                 # Remove the detection from the list as it has been matched with a previously detected object
                 detected_objects.remove(closest_match)
-            # What to do when an object can't find a match, possibly remove it
+            # When an object can't find a match, remove it
             else:
-                # TODO
-                pass
+                object_list.remove(known_object)
         # If there are still detections remaining after all objects have been matched, create a new object for each new detection
         for new_object_box in detected_objects:
             object_xyz_relative, object_depth = calculate_relative_position(new_object_box, depth_frame, depth_intrin)
@@ -354,7 +386,7 @@ if __name__=="__main__":
                 object_list.append(new_object)
         print(object_list)
 
-	# Show the detected objects
+	    # Show the detected objects
         cv2.namedWindow("result", cv2.WINDOW_AUTOSIZE)
         image_color = utils.draw_bbox(frame, bboxes)
         result = cv2.cvtColor(image_color, cv2.COLOR_RGB2BGR)
