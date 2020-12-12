@@ -19,6 +19,7 @@ import tensorflow as tf
 import pyrealsense2 as rs
 import statistics
 import os
+import random
 
 flags.DEFINE_string('framework', 'tf', '(tf, tflite')
 flags.DEFINE_string('weights', './data/yolov4.weights',
@@ -50,6 +51,7 @@ CAMERA_DISPLACEMENT = [0.00, 0.20, 0.10]  # position of the camera on the wheelc
 CAMERA_ANGLE = np.deg2rad(0)  # camera angle around the x-axis in radians
 CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(69.4)  # the horizontal field of view of the camera in radians
 DETECTABLE_OBJECTS = [67]  # IDs of the objects that need to be detected
+#DETECTABLE_OBJECTS = [39, 62, 67]
 
 # replace these later:
 OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this isn't visible
@@ -201,9 +203,11 @@ class Object():
         object_marker.scale.x = scale_x
         object_marker.scale.y = scale_y
         object_marker.scale.z = scale_z
-        object_marker.color.r = 0.1
-        object_marker.color.g = 0.1
-        object_marker.color.b = 0.1
+        # Picks a random color for each type of object
+        random.seed(self.type)
+        object_marker.color.r = random.uniform(0.0, 1.0)
+        object_marker.color.g = random.uniform(0.0, 1.0)
+        object_marker.color.b = random.uniform(0.0, 1.0)
         object_marker.color.a = 1
         object_marker.pose.orientation.z = orientation_z
         object_marker.pose.orientation.w = 1.0
