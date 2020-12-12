@@ -54,8 +54,6 @@ DETECTABLE_OBJECTS = [67]  # IDs of the objects that need to be detected
 #DETECTABLE_OBJECTS = [39, 62, 67]
 
 # replace these later:
-OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this isn't visible
-MAX_OBJECT_HISTORY = 1  # determines how many past instances of an object are remembered, used for filtering final results
 WHEELCHAIR_POS = [0, 0, 0]
 WHEELCHAIR_ANGLE = np.deg2rad(0)
 
@@ -163,53 +161,34 @@ class Object():
     -the bounding box of the recognized object
     '''
     def __init__(self, object_type, rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox):
-        self.recent_detections = []
         self.type = object_type
         self.update_pose(rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox)
 
     def update_pose(self, rel_pos, distance, wheelchair_pos, wheelchair_angle, bbox):
         self.x, self.y, self.z = absolute_position(rel_pos, wheelchair_pos, wheelchair_angle)
-        self.scale_x = calculate_length(box[2]-box[0], object_depth)
-        self.scale_y = OBJECT_DEPTH_ESTIMATE
-        self.scale_z = calculate_length(box[3]-box[1], object_depth)
+        self.scale_x = calculate_length(bbox[2]-bbox[0], object_depth)
+        self.scale_z = calculate_length(bbox[3]-bbox[1], object_depth)
+        # Uses the average of the object's height and length to estimate it's depth
+        self.scale_y = (self.scale_x+self.scale_z)/2
         self.orientation_z = wheelchair_angle
-        self.recent_detections.append([[self.x, self.y, self.z], [self.scale_x, self.scale_y, self.scale_z], self.orientation_z])
-        if len(self.recent_detections) > MAX_OBJECT_HISTORY:
-            self.recent_detections.pop(0)
-
-    # Calculates new values based on previous detections.
-    # TODO remove or re-implement this
-    def average_detections(self):
-        amount = len(self.recent_detections)
-        total_x, total_y, total_z, total_scale_x, total_scale_y, total_scale_z, total_orientation = 0, 0, 0, 0, 0, 0, 0
-        for i in range(amount):
-            total_x += self.recent_detections[i][0][0]*(1/amount)
-            total_y += self.recent_detections[i][0][1]*(1/amount)
-            total_z += self.recent_detections[i][0][2]*(1/amount)
-            total_scale_x += self.recent_detections[i][1][0]*(1/amount)
-            total_scale_y += self.recent_detections[i][1][1]*(1/amount)
-            total_scale_z += self.recent_detections[i][1][2]*(1/amount)
-            total_orientation += self.recent_detections[i][2]*(1/amount)
-        return total_x, total_y, total_z, total_scale_x, total_scale_y, total_scale_z, total_orientation
 
     def marker(self):
         object_marker = Marker()
         object_marker.header.frame_id = "base_link"
         object_marker.type = Marker.CUBE
-        x, y, z, scale_x, scale_y, scale_z, orientation_z = self.average_detections()
-        object_marker.pose.position.x = x
-        object_marker.pose.position.y = y
-        object_marker.pose.position.z = z
-        object_marker.scale.x = scale_x
-        object_marker.scale.y = scale_y
-        object_marker.scale.z = scale_z
+        object_marker.pose.position.x = self.x
+        object_marker.pose.position.y = self.y
+        object_marker.pose.position.z = self.z
+        object_marker.scale.x = self.scale_x
+        object_marker.scale.y = self.scale_y
+        object_marker.scale.z = self.scale_z
         # Picks a random color for each type of object
         random.seed(self.type)
         object_marker.color.r = random.uniform(0.0, 1.0)
         object_marker.color.g = random.uniform(0.0, 1.0)
         object_marker.color.b = random.uniform(0.0, 1.0)
         object_marker.color.a = 1
-        object_marker.pose.orientation.z = orientation_z
+        object_marker.pose.orientation.z = self.orientation_z
         object_marker.pose.orientation.w = 1.0
         return object_marker
 
@@ -385,7 +364,7 @@ if __name__=="__main__":
             # Update the pose of the object with the closest new detection
             if closest_match is not None:
                 object_xyz_relative, object_depth = calculate_relative_position(closest_match, depth_frame, depth_intrin)
-                known_object.update_pose(object_xyz_relative, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, box)
+                known_object.update_pose(object_xyz_relative, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, closest_match)
                 # Remove the detection from the list as it has been matched with a previously detected object
                 detected_objects.remove(closest_match)
             # When an object can't find a match, remove it
