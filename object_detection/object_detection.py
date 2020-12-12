@@ -56,7 +56,6 @@ OBJECT_DEPTH_ESTIMATE = 0.10  # estimate for how deep an object is, since this i
 MAX_OBJECT_HISTORY = 1  # determines how many past instances of an object are remembered, used for filtering final results
 WHEELCHAIR_POS = [0, 0, 0]
 WHEELCHAIR_ANGLE = np.deg2rad(0)
-MAX_VIEW_DISTANCE = 3  # how far the camera can see in meters
 
 def main(_argv):
     pass
@@ -97,7 +96,6 @@ def calculate_relative_position(box, depth_frame, depth_intrin):
     else:
         object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
         object_xyz = [object_point[0], object_point[2], -object_point[1]]
-        #depth_colormap[max(0, min(y_mid, 479)), max(0, min(x_mid, 639))] = [0,255,0]
         return object_xyz, object_depth
 
 # Calculates if a given point is in view of the camera in 2D
@@ -108,7 +106,6 @@ def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_di
     position = np.array([[point_x], [point_y]])
     rot_mat = np.array([[np.cos(-WHEELCHAIR_ANGLE), -np.sin(-WHEELCHAIR_ANGLE)], [np.sin(-WHEELCHAIR_ANGLE), np.cos(-WHEELCHAIR_ANGLE)]])
     result = np.dot(rot_mat, position)
-    print(result)
     # Checks if the point is behind the camera or too far away
     distance = result[1][0]
     if distance <= 0 or distance > max_distance:
@@ -117,7 +114,6 @@ def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_di
         # Checks if the point lies within the triangle-shaped view of the camera
         x_position = result[0][0]
         outer_x = distance*np.sin(CAMERA_VIEW_ANGLE_HORIZONTAL)
-        #print(outer_x)
         if x_position > -outer_x and x_position < outer_x:
             return True
         else:
@@ -141,6 +137,18 @@ def clear_markers(amount, largest_amount):
         empty_marker.id = i + amount
         empty_markers.markers.append(empty_marker)
     publisher.publish(empty_markers)
+
+# Determines how far the camera can see in a given instance
+def max_view_distance(frame):
+    image = np.asanyarray(frame.get_data())
+    image_scaled = cv2.convertScaleAbs(image, alpha=0.08)
+    # Filter all values of 255 which are usually reflections
+    image_scaled[image_scaled == 255] = 0
+    # Find the position of the pixel that is furthest away from the camera
+    max_value = np.amax(image_scaled)
+    furthest_pixels = np.where(image_scaled == max_value)
+    furthest_depth = frame.get_distance(furthest_pixels[1][0], furthest_pixels[0][0])
+    return furthest_depth
 
 class Object():
     '''
@@ -317,7 +325,7 @@ if __name__=="__main__":
         image_data = image_data[np.newaxis, ...].astype(np.float32)
         prev_time = time.time()
 
-        scaled_depth=cv2.convertScaleAbs(depth_image, alpha=0.08)
+        scaled_depth = cv2.convertScaleAbs(depth_image, alpha=0.08)
         depth_colormap = cv2.applyColorMap(scaled_depth, cv2.COLORMAP_JET)
 
 	    # Feed the color image into the neural network
@@ -348,8 +356,9 @@ if __name__=="__main__":
         # Filter previously detected objects that are in view
         visible_object_list = []
         camera_x, camera_y, camera_z = absolute_position([0, 0, 0], WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
+        view_distance = max_view_distance(depth_frame)
         for known_object in object_list:
-            if point_in_view(known_object.x, known_object.y, camera_x, camera_y, WHEELCHAIR_ANGLE, MAX_VIEW_DISTANCE):
+            if point_in_view(known_object.x, known_object.y, camera_x, camera_y, WHEELCHAIR_ANGLE, view_distance):
                 visible_object_list.append(known_object)
 
 	    # Loop over each previously detected object that should be in view
