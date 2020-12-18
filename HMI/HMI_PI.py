@@ -7,16 +7,22 @@
 # WARNING! All changes made in this file will be lost!
 import roslib
 import rospy
+from std_msgs.msg import Int32, Float32, String
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 class Ui_Form(object):
     def Bttn_mode(self):
+        mode = rospy.Publisher('Mode', String, queue_size=10)
         if self.Button_Mode.isChecked():
             self.Button_Mode.setStyleSheet("Background-color : Green")
             self.Button_Mode.setText("Automatische Besturing")
+            mode.publish("Automatisch")
+
         else:
             self.Button_Mode.setStyleSheet("Background-color : Red")
             self.Button_Mode.setText("Handmatige Besturing")
+            mode.publish("Handmatig")
+    
     def setupUi(self, Form):
         Form.setObjectName("Form")
         Form.resize(403, 482)
@@ -42,13 +48,22 @@ class Ui_Form(object):
         Form.setWindowTitle(_translate("Form", "Form"))
         self.Button_Mode.setText(_translate("Form", "Handmatige Besturing"))
 
+def Roscom():
+    print "Init Ros Communicatie"
+    rospy.init_node('Rolstoel_HMI_node', anonymous=True)
+
 
 if __name__ == "__main__":
     import sys
-    app = QtWidgets.QApplication(sys.argv)
-    Form = QtWidgets.QWidget()
-    ui = Ui_Form()
-    ui.setupUi(Form)
-    Form.show()
-    sys.exit(app.exec_())
+    Roscom()
 
+    try:
+            app
+    except:
+        app = QtWidgets.QApplication(sys.argv)
+        Form = QtWidgets.QWidget()
+        ui = Ui_Form()
+        ui.setupUi(Form)
+        Form.setWindowTitle("Rolstoel")
+        Form.show()
+        sys.exit(app.exec_())
