@@ -7,7 +7,7 @@
 # WARNING! All changes made in this file will be lost!
 import roslib
 import rospy
-from std_msgs.msg import Int32, Float32, String
+from std_msgs.msg import Int32, Float32, String, Bool
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 class Ui_Form(object):
@@ -17,11 +17,20 @@ class Ui_Form(object):
             self.Button_Mode.setStyleSheet("Background-color : Green")
             self.Button_Mode.setText("Automatische Besturing")
             mode.publish("Automatisch")
+            print "Automatisch"
+
 
         else:
             self.Button_Mode.setStyleSheet("Background-color : Red")
             self.Button_Mode.setText("Handmatige Besturing")
             mode.publish("Handmatig")
+            print "Handmatig"
+    
+    def Batterijniv(self, data):
+        self.Accu_Bar.setValue(10)
+
+    def Snelheid(self, data):
+        self.lcdNumber.setProperty("value", 15)
     
     def setupUi(self, Form):
         Form.setObjectName("Form")
@@ -41,7 +50,9 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
         self.Button_Mode.clicked.connect(self.Bttn_mode)
+#        self.lcdNumber.setProperty("value", Snelheid)
         QtCore.QMetaObject.connectSlotsByName(Form)
+
 
     def retranslateUi(self, Form):
         _translate = QtCore.QCoreApplication.translate
@@ -53,6 +64,12 @@ def Roscom():
     rospy.init_node('Rolstoel_HMI_node', anonymous=True)
 
 
+def callback(data):
+    rospy.loginfo("New Message %s", data)
+    ui.Batterijniv(data)
+    ui.Snelheid(data)
+
+
 if __name__ == "__main__":
     import sys
     Roscom()
@@ -62,6 +79,7 @@ if __name__ == "__main__":
     except:
         app = QtWidgets.QApplication(sys.argv)
         Form = QtWidgets.QWidget()
+        rospy.Subscriber("Batterij",String, callback)
         ui = Ui_Form()
         ui.setupUi(Form)
         Form.setWindowTitle("Rolstoel")

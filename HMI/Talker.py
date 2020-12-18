@@ -2,11 +2,11 @@ import rospy
 from std_msgs.msg import String
 
 def talker():
-    pub = rospy.Publisher('Chatter', String, queue_size=10)
+    pub = rospy.Publisher('Batterij', String, queue_size=10)
     rospy.init_node('talker', anonymous=True)
     rate = rospy.Rate(10)
     while not rospy.is_shutdown():
-        hello_str = "Hello World"
+        hello_str = "[10, 15]"
         rospy.loginfo(hello_str)
         pub.publish(hello_str)
         rate.sleep()
