@@ -37,10 +37,15 @@ A positive z means going upwards.
 CAMERA_DISPLACEMENT = [0.00, 0.20, 0.10]  # position of the camera on the wheelchair
 CAMERA_ANGLE = np.deg2rad(0)  # camera angle around the x-axis in radians
 CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(69.4)  # the horizontal field of view of the camera in radians
-DETECTABLE_OBJECTS = [67]  # IDs of the objects that need to be detected
-#DETECTABLE_OBJECTS = [39, 62, 67]
 RESOLUTION_WIDTH = 640
 RESOLUTION_HEIGHT = 480
+# IDs of the objects that need to be detected, more objects make the detection speed slower
+# Possible indoor obstacles:
+DETECTABLE_OBJECTS = [0,1,2,3,13,15,16,24,25,26,28,30,31,32,33,34,35,36,37,38,39,40,41,45,56,57,58,59,60,61,62,63,68,69,70,71,72,75,77]
+# All objects:
+#DETECTABLE_OBJECTS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79]
+# Just phones and bottles:
+#DETECTABLE_OBJECTS = [39, 67]
 
 # replace these later:
 WHEELCHAIR_POS = [0, 0, 0]
