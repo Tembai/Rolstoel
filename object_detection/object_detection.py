@@ -34,22 +34,25 @@ A positive x means going to the right of the camera.
 A positive y means going in the direction the camera is facing.
 A positive z means going upwards.
 '''
-CAMERA_DISPLACEMENT = [0.00, 0.20, 0.10]  # position of the camera on the wheelchair
+CAMERA_DISPLACEMENT = [0.00, 0.00, 0.00]  # position of the camera on the wheelchair
 CAMERA_ANGLE = np.deg2rad(0)  # camera angle around the x-axis in radians
 CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(69.4)  # the horizontal field of view of the camera in radians
 RESOLUTION_WIDTH = 640
 RESOLUTION_HEIGHT = 480
 # IDs of the objects that need to be detected, more objects make the detection speed slower
 # Possible indoor obstacles:
-DETECTABLE_OBJECTS = [0,1,2,3,13,15,16,24,25,26,28,30,31,32,33,34,35,36,37,38,39,40,41,45,56,57,58,59,60,61,62,63,68,69,70,71,72,75,77]
+#DETECTABLE_OBJECTS = [0,1,2,3,13,15,16,24,25,26,28,30,31,32,33,34,35,36,37,38,39,40,41,45,56,57,58,59,60,61,62,63,68,69,70,71,72,75,77]
 # All objects:
 #DETECTABLE_OBJECTS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79]
 # Just phones and bottles:
-#DETECTABLE_OBJECTS = [39, 67]
+DETECTABLE_OBJECTS = [39, 67]
 
 # replace these later:
 WHEELCHAIR_POS = [0, 0, 0]
 WHEELCHAIR_ANGLE = np.deg2rad(0)
+
+flip_camera_ver = False
+flip_camera_hor = False
 
 # Configure depth and color streams
 pipeline = rs.pipeline()
@@ -90,6 +93,10 @@ def detect_object_depth_orientation(box, depth_frame):
     min_y = int(max(0, box[1]-height_tolerance))
     max_y = int(min(RESOLUTION_HEIGHT-1, box[3]+height_tolerance))
     image = np.asanyarray(depth_frame.get_data())
+    if flip_camera_ver:
+        image = np.flipud(image)
+    if flip_camera_hor:
+        image = np.fliplr(image)
     image_sliced = image[min_y:max_y, min_x:max_x]
     h, w = image_sliced.shape
     # Determines the size and location of the bounding box in the new image [x_min, y_min, x_max, y_max]
@@ -141,6 +148,10 @@ def detect_object_depth_orientation(box, depth_frame):
             object_layer = image_box
             object_layer_score = score
 
+    # If something went wrong
+    if object_layer is None:
+        return None, None
+    
     # Calculates the average depth of the object
     average_pixel_value = object_layer[object_layer!=0].mean()
     average_pixel_depth = average_pixel_value*depth_scale
@@ -183,9 +194,21 @@ def calculate_relative_pose(box, depth_frame, depth_intrin):
     x_mid = int((box[0]+box[2])/2)
     y_mid = int((box[1]+box[3])/2)
     object_depth, object_angle = detect_object_depth_orientation(box, depth_frame)
-    object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
-    object_xyz = [object_point[0], object_point[2], -object_point[1]]
-    return object_xyz, object_depth, object_angle
+    if object_depth is not None:
+        # The camera intrinsics couldn't be flipped so the other data has to be temporarily flipped
+        if flip_camera_ver:
+            y_mid = RESOLUTION_HEIGHT-y_mid
+        if flip_camera_hor:
+            x_mid = RESOLUTION_WIDTH-x_mid
+        object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
+        if flip_camera_ver:
+            object_point[1] = -object_point[1]
+        if flip_camera_hor:
+            object_point[0] = -object_point[0]
+        object_xyz = [object_point[0], object_point[2], -object_point[1]]
+        return object_xyz, object_depth, object_angle
+    else:
+        return None, None, None
 
 # Calculates if a given point is in view of the camera in 2D
 def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_distance):
@@ -230,12 +253,20 @@ def clear_markers(amount, largest_amount):
 # Determines how far the camera can see in a given instance
 def max_view_distance(frame):
     image = np.asanyarray(frame.get_data())
+    if flip_camera_ver:
+        image = np.flipud(image)
+    if flip_camera_hor:
+        image = np.fliplr(image)
     image_scaled = cv2.convertScaleAbs(image, alpha=0.08)
     # Filter all values of 255 which are usually reflections
     image_scaled[image_scaled == 255] = 0
     # Find the position of the pixel that is furthest away from the camera
     max_value = np.amax(image_scaled)
     furthest_pixels = np.where(image_scaled == max_value)
+    if flip_camera_ver:
+        furthest_pixels[1][0] = RESOLUTION_WIDTH-furthest_pixels[1][0]-1
+    if flip_camera_hor:
+        furthest_pixels[0][0] = RESOLUTION_HEIGHT-furthest_pixels[0][0]-1
     furthest_depth = frame.get_distance(furthest_pixels[1][0], furthest_pixels[0][0])
     return furthest_depth
 
@@ -388,6 +419,12 @@ if __name__=="__main__":
 	    # Change the frames into an image
         depth_image = np.asanyarray(depth_frame.get_data())
         color_image = np.asanyarray(color_frame.get_data())
+        if flip_camera_ver:
+            depth_image = np.flipud(depth_image)
+            color_image = np.flipud(color_image)
+        if flip_camera_hor:
+            depth_image = np.fliplr(depth_image)
+            color_image = np.fliplr(color_image)
 
         frame = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame)
@@ -440,28 +477,31 @@ if __name__=="__main__":
                 # Check which of the detected objects of the same type lies closest
                 if box[5] == known_object.type:
                     object_xyz_relative, object_depth, object_angle = calculate_relative_pose(box, depth_frame, depth_intrin)
-                    object_x, object_y, object_z = absolute_position(object_xyz_relative, WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
-                    distance = abs(object_x-known_object.x)+abs(object_y-known_object.y)+abs(object_z-known_object.z)
-                    if closest_match is None:
-                        closest_match = box
-                        closest_match_distance = distance
-                    elif distance < closest_match_distance:
-                        closest_match = box
-                        closest_match_distance = distance
+                    if object_xyz_relative is not None:
+                        object_x, object_y, object_z = absolute_position(object_xyz_relative, WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
+                        distance = abs(object_x-known_object.x)+abs(object_y-known_object.y)+abs(object_z-known_object.z)
+                        if closest_match is None:
+                            closest_match = box
+                            closest_match_distance = distance
+                        elif distance < closest_match_distance:
+                            closest_match = box
+                            closest_match_distance = distance
             # Update the pose of the object with the closest new detection
             if closest_match is not None:
                 object_xyz_relative, object_depth, object_angle = calculate_relative_pose(closest_match, depth_frame, depth_intrin)
-                known_object.update_pose(object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, closest_match)
-                # Remove the detection from the list as it has been matched with a previously detected object
-                detected_objects.remove(closest_match)
+                if object_xyz_relative is not None:
+                    known_object.update_pose(object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, closest_match)
+                    # Remove the detection from the list as it has been matched with a previously detected object
+                    detected_objects.remove(closest_match)
             # When an object can't find a match, remove it
             else:
                 object_list.remove(known_object)
         # If there are still detections remaining after all objects have been matched, create a new object for each new detection
         for new_object_box in detected_objects:
             object_xyz_relative, object_depth, object_angle = calculate_relative_pose(new_object_box, depth_frame, depth_intrin)
-            new_object = Object(new_object_box[5], object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, new_object_box)
-            object_list.append(new_object)
+            if object_xyz_relative is not None:
+                new_object = Object(new_object_box[5], object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, new_object_box)
+                object_list.append(new_object)
         print(object_list)
 
 	    # Show the detected objects
