@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 # Form implementation generated from reading ui file 'HMI_PI.ui'
 #
 # Created by: PyQt5 UI code generator 5.10.1
@@ -7,7 +6,7 @@
 # WARNING! All changes made in this file will be lost!
 import roslib
 import rospy
-from std_msgs.msg import Int32, Float32, String, Bool
+from std_msgs.msg import Int32MultiArray, Float32, String, Bool
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 class Ui_Form(object):
@@ -27,10 +26,10 @@ class Ui_Form(object):
             print "Handmatig"
     
     def Batterijniv(self, data):
-        self.Accu_Bar.setValue(10)
+        self.Accu_Bar.setValue(data)
 
     def Snelheid(self, data):
-        self.lcdNumber.setProperty("value", 15)
+        self.lcdNumber.setProperty("value", data)
     
     def setupUi(self, Form):
         Form.setObjectName("Form")
@@ -66,8 +65,8 @@ def Roscom():
 
 def callback(data):
     rospy.loginfo("New Message %s", data)
-    ui.Batterijniv(data)
-    ui.Snelheid(data)
+    ui.Batterijniv(data[0])
+    ui.Snelheid(data[1])
 
 
 if __name__ == "__main__":
@@ -79,7 +78,7 @@ if __name__ == "__main__":
     except:
         app = QtWidgets.QApplication(sys.argv)
         Form = QtWidgets.QWidget()
-        rospy.Subscriber("Batterij",String, callback)
+        rospy.Subscriber("Batterij",Int32MultiArray, callback)
         ui = Ui_Form()
         ui.setupUi(Form)
         Form.setWindowTitle("Rolstoel")
