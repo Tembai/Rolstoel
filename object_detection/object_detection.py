@@ -2,7 +2,7 @@
 
 import rospy
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Quaternion, Pose, Point, Vector3
+from geometry_msgs.msg import Quaternion, Pose, Point, Vector3, PoseStamped
 from std_msgs.msg import Header, ColorRGBA
 from interactive_markers.interactive_marker_server import *
 from visualization_msgs.msg import *
@@ -36,7 +36,8 @@ A positive z means going upwards.
 '''
 CAMERA_DISPLACEMENT = [0.00, 0.00, 0.00]  # position of the camera on the wheelchair
 CAMERA_ANGLE = np.deg2rad(0)  # camera angle around the x-axis in radians
-CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(69.4)  # the horizontal field of view of the camera in radians
+CAMERA_VIEW_ANGLE_HORIZONTAL = np.deg2rad(54)  # the horizontal field of view of the camera in radians
+WHEELCHAIR_ANGLE_OFFSET = np.deg2rad(90) # Used to align the orientation of the map/objects
 RESOLUTION_WIDTH = 640
 RESOLUTION_HEIGHT = 480
 # IDs of the objects that need to be detected, more objects make the detection speed slower
@@ -45,11 +46,10 @@ RESOLUTION_HEIGHT = 480
 # All objects:
 #DETECTABLE_OBJECTS = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79]
 # Just phones and bottles:
-DETECTABLE_OBJECTS = [39, 67]
+DETECTABLE_OBJECTS = [39, 67, 58]
 
-# replace these later:
-WHEELCHAIR_POS = [0, 0, 0]
-WHEELCHAIR_ANGLE = np.deg2rad(0)
+wheelchair_pos = [0, 0, 0]
+wheelchair_angle = 0
 
 flip_camera_ver = False
 flip_camera_hor = False
@@ -71,6 +71,12 @@ align = rs.align(align_to)
 
 def main(_argv):
     pass
+
+# Updates the position of the wheelchair
+def update_pose_data(data):
+    global wheelchair_pos, wheelchair_angle
+    wheelchair_pos = [data.pose.position.x, data.pose.position.y, data.pose.position.z]
+    wheelchair_angle = data.pose.orientation.z
 
 # Converts pixels to meters for this specific camera
 def calculate_length(pixels, distance):
@@ -201,11 +207,17 @@ def calculate_relative_pose(box, depth_frame, depth_intrin):
         if flip_camera_hor:
             x_mid = RESOLUTION_WIDTH-x_mid
         object_point = rs.rs2_deproject_pixel_to_point(depth_intrin, [x_mid, y_mid], object_depth)
+        # Makes sure all objects are above ground-level
+        object_point[1] = -object_point[1]
+        if object_point[1] < 0:
+            object_point[1] = -object_point[1]
+        else:
+            object_point[1] = object_point[1]*2
         if flip_camera_ver:
             object_point[1] = -object_point[1]
         if flip_camera_hor:
             object_point[0] = -object_point[0]
-        object_xyz = [object_point[0], object_point[2], -object_point[1]]
+        object_xyz = [object_point[0], object_point[2], object_point[1]]
         return object_xyz, object_depth, object_angle
     else:
         return None, None, None
@@ -216,7 +228,7 @@ def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_di
     point_x = point_x-camera_x
     point_y = point_y-camera_y
     position = np.array([[point_x], [point_y]])
-    rot_mat = np.array([[np.cos(-WHEELCHAIR_ANGLE), -np.sin(-WHEELCHAIR_ANGLE)], [np.sin(-WHEELCHAIR_ANGLE), np.cos(-WHEELCHAIR_ANGLE)]])
+    rot_mat = np.array([[np.cos(-wheelchair_angle), -np.sin(-wheelchair_angle)], [np.sin(-wheelchair_angle), np.cos(-wheelchair_angle)]])
     result = np.dot(rot_mat, position)
     # Checks if the point is behind the camera or too far away
     distance = result[1][0]
@@ -225,7 +237,7 @@ def point_in_view(point_x, point_y, camera_x, camera_y, wheelchair_angle, max_di
     else:
         # Checks if the point lies within the triangle-shaped view of the camera
         x_position = result[0][0]
-        outer_x = distance*np.sin(CAMERA_VIEW_ANGLE_HORIZONTAL)
+        outer_x = distance*np.sin(CAMERA_VIEW_ANGLE_HORIZONTAL/2)
         if x_position > -outer_x and x_position < outer_x:
             return True
         else:
@@ -276,15 +288,14 @@ class Object():
     -the index of the objecttype
     -the relative position of the object to the camera as [x, y, z] in meters
     -the distance from the camera to the object in meters
-    -the position of the wheelchair as [x, y, z] in meters
     -the angle of the wheelchair around the z-axis in radians
     -the bounding box of the recognized object
     '''
-    def __init__(self, object_type, rel_pos, rel_angle, distance, wheelchair_pos, wheelchair_angle, bbox):
+    def __init__(self, object_type, rel_pos, rel_angle, distance, wheelchair_angle, bbox):
         self.type = object_type
-        self.update_pose(rel_pos, rel_angle, distance, wheelchair_pos, wheelchair_angle, bbox)
+        self.update_pose(rel_pos, rel_angle, distance, wheelchair_angle, bbox)
 
-    def update_pose(self, rel_pos, rel_angle, distance, wheelchair_pos, wheelchair_angle, bbox):
+    def update_pose(self, rel_pos, rel_angle, distance, wheelchair_angle, bbox):
         self.x, self.y, self.z = absolute_position(rel_pos, wheelchair_pos, wheelchair_angle)
         self.scale_x = calculate_length(bbox[2]-bbox[0], object_depth)
         self.scale_z = calculate_length(bbox[3]-bbox[1], object_depth)
@@ -292,12 +303,16 @@ class Object():
         self.scale_y = (self.scale_x+self.scale_z)/2
         self.orientation_z = rel_angle+wheelchair_angle
 
-    def marker(self):
+    def marker(self, delete=False):
+        global index
         object_marker = Marker()
         object_marker.header.frame_id = "base_link"
         object_marker.type = Marker.CUBE
-        object_marker.pose.position.x = self.x
-        object_marker.pose.position.y = self.y
+        position = np.array([[self.x], [self.y]])
+        rot_mat = np.array([[np.cos(WHEELCHAIR_ANGLE_OFFSET), -np.sin(WHEELCHAIR_ANGLE_OFFSET)], [np.sin(WHEELCHAIR_ANGLE_OFFSET), np.cos(WHEELCHAIR_ANGLE_OFFSET)]])
+        result = np.dot(rot_mat, position)
+        object_marker.pose.position.x = result[0]
+        object_marker.pose.position.y = result[1]
         object_marker.pose.position.z = self.z
         object_marker.scale.x = self.scale_x
         object_marker.scale.y = self.scale_y
@@ -310,6 +325,10 @@ class Object():
         object_marker.color.a = 1
         object_marker.pose.orientation.z = self.orientation_z
         object_marker.pose.orientation.w = 1.0
+        object_marker.id = index
+        index += 1
+        if delete:
+            object_marker.action = Marker.DELETE
         return object_marker
 
 if __name__=="__main__":
@@ -372,8 +391,10 @@ if __name__=="__main__":
         print(output_details)
 
     # Creates a ROS node for communication with RViz
-    publisher = rospy.Publisher("object_detection", MarkerArray, queue_size=100)
     rospy.init_node("visualization")
+    publisher = rospy.Publisher("object_detection", MarkerArray, queue_size=100)
+    rospy.Subscriber("slam_out_pose", PoseStamped, update_pose_data)    # Subscriber to receive the wheelchair's pose
+
 
     # create a marker for the camera
     camera = Marker()
@@ -391,12 +412,15 @@ if __name__=="__main__":
     camera.color.a = 1
     camera.pose.orientation.x = CAMERA_ANGLE
     camera.pose.orientation.w = 1.0
+    camera.id = 0
 
     # Detect object at a given frequency
     rate = rospy.Rate(10) # hz
     object_list = []
     largest_index = 0
+    current_time = time.time()
     while not rospy.is_shutdown():
+        index = 1
         markers = MarkerArray()
         markers.markers.append(camera)
 
@@ -435,8 +459,9 @@ if __name__=="__main__":
 
         scaled_depth = cv2.convertScaleAbs(depth_image, alpha=0.08)
         depth_colormap = cv2.applyColorMap(scaled_depth, cv2.COLORMAP_JET)
-
-	    # Feed the color image into the neural network
+        #print('rest:', time.time()-current_time)
+        #current_time = time.time()
+	# Feed the color image into the neural network
         if FLAGS.framework == 'tf':
             pred_bbox = model.predict(image_data)
         else:
@@ -448,8 +473,10 @@ if __name__=="__main__":
             pred_bbox = utils.postprocess_bbbox(pred_bbox, ANCHORS, STRIDES, XYSCALE)
         else:
             pred_bbox = utils.postprocess_bbbox(pred_bbox, ANCHORS, STRIDES)
-
-	    # Draw boxes around the detected objects
+        
+        #print('neural network:', time.time()-current_time)
+        #current_time = time.time()
+	# Draw boxes around the detected objects
         bboxes = utils.postprocess_boxes(pred_bbox, frame_size, input_size, 0.25)
         bboxes = utils.nms(bboxes, 0.213, method='nms')
 
@@ -463,13 +490,13 @@ if __name__=="__main__":
 
         # Filter previously detected objects that are in view
         visible_object_list = []
-        camera_x, camera_y, camera_z = absolute_position([0, 0, 0], WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
+        camera_x, camera_y, camera_z = absolute_position([0, 0, 0], wheelchair_pos, wheelchair_angle)
         view_distance = max_view_distance(depth_frame)
         for known_object in object_list:
-            if point_in_view(known_object.x, known_object.y, camera_x, camera_y, WHEELCHAIR_ANGLE, view_distance):
+            if point_in_view(known_object.x, known_object.y, camera_x, camera_y, wheelchair_angle, view_distance):
                 visible_object_list.append(known_object)
 
-	    # Loop over each previously detected object that should be in view
+	# Loop over each previously detected object that should be in view
         for known_object in visible_object_list:
             closest_match = None
             closest_match_distance = None
@@ -478,7 +505,7 @@ if __name__=="__main__":
                 if box[5] == known_object.type:
                     object_xyz_relative, object_depth, object_angle = calculate_relative_pose(box, depth_frame, depth_intrin)
                     if object_xyz_relative is not None:
-                        object_x, object_y, object_z = absolute_position(object_xyz_relative, WHEELCHAIR_POS, WHEELCHAIR_ANGLE)
+                        object_x, object_y, object_z = absolute_position(object_xyz_relative, wheelchair_pos, wheelchair_angle)
                         distance = abs(object_x-known_object.x)+abs(object_y-known_object.y)+abs(object_z-known_object.z)
                         if closest_match is None:
                             closest_match = box
@@ -490,17 +517,20 @@ if __name__=="__main__":
             if closest_match is not None:
                 object_xyz_relative, object_depth, object_angle = calculate_relative_pose(closest_match, depth_frame, depth_intrin)
                 if object_xyz_relative is not None:
-                    known_object.update_pose(object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, closest_match)
+                    known_object.update_pose(object_xyz_relative, object_angle, object_depth, wheelchair_angle, closest_match)
+                    markers.markers.append(known_object.marker())
                     # Remove the detection from the list as it has been matched with a previously detected object
                     detected_objects.remove(closest_match)
             # When an object can't find a match, remove it
             else:
+                markers.markers.append(known_object.marker(delete=True))
                 object_list.remove(known_object)
         # If there are still detections remaining after all objects have been matched, create a new object for each new detection
         for new_object_box in detected_objects:
             object_xyz_relative, object_depth, object_angle = calculate_relative_pose(new_object_box, depth_frame, depth_intrin)
             if object_xyz_relative is not None:
-                new_object = Object(new_object_box[5], object_xyz_relative, object_angle, object_depth, WHEELCHAIR_POS, WHEELCHAIR_ANGLE, new_object_box)
+                new_object = Object(new_object_box[5], object_xyz_relative, object_angle, object_depth, wheelchair_angle, new_object_box)
+                markers.markers.append(new_object.marker())
                 object_list.append(new_object)
         print(object_list)
 
@@ -515,19 +545,10 @@ if __name__=="__main__":
             pipeline.stop()
             break
 
-        # Creates markers for every detected object
-        for detected_object in object_list:
-            markers.markers.append(detected_object.marker())
-
-        index = 0
-        for m in markers.markers:
-            m.id = index
-            index += 1
-
         # Memorizes the largest amount of objects saved at one time to be able to clear the markers
         if index > largest_index:
             largest_index = index
-        clear_markers(index, largest_index)
+        #clear_markers(index, largest_index)
 
         publisher.publish(markers)
         rate.sleep()
